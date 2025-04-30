@@ -38,10 +38,10 @@ type Task struct {
 	CreatedAt   time.Time       `json:"created_at" gorm:"type:datetime;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt   time.Time       `json:"updated_at" gorm:"type:datetime;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"`
 
-	// GORM relationships
-	Dependencies []TaskDependency `json:"-" gorm:"foreignKey:TaskID"`
-	DependsOn    []TaskDependency `json:"-" gorm:"foreignKey:DependsOnTaskID"`
-	ChildTasks   []Task           `json:"-" gorm:"foreignKey:ParentID"`
+	// GORM relationships (without foreign keys)
+	Dependencies []TaskDependency `json:"-" gorm:"references:ID"`
+	DependsOn    []TaskDependency `json:"-" gorm:"references:ID"`
+	ChildTasks   []Task           `json:"-" gorm:"references:ID"`
 }
 
 type TaskDependency struct {
@@ -50,7 +50,7 @@ type TaskDependency struct {
 	DependsOnTaskID uint64    `json:"depends_on_task_id" gorm:"uniqueIndex:uk_task_dependency,priority:2;index:idx_depends_on;not null"`
 	CreatedAt       time.Time `json:"created_at" gorm:"type:datetime;not null;default:CURRENT_TIMESTAMP"`
 
-	// GORM relationships
-	Task      *Task `json:"-" gorm:"foreignKey:TaskID"`
-	DependsOn *Task `json:"-" gorm:"foreignKey:DependsOnTaskID"`
+	// GORM relationships (without foreign keys)
+	Task      *Task `json:"-" gorm:"references:ID"`
+	DependsOn *Task `json:"-" gorm:"references:ID"`
 }

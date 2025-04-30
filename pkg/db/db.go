@@ -40,7 +40,8 @@ func New(cfg Config) (*DB, error) {
 
 	// Create GORM connection with MySQL driver
 	gormDB, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logLevel),
+		Logger:                                   logger.Default.LogMode(logLevel),
+		DisableForeignKeyConstraintWhenMigrating: true, // Disable foreign key constraints
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database connection: %w", err)

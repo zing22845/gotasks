@@ -43,14 +43,3 @@ CREATE TABLE IF NOT EXISTS `task_dependencies` (
   CONSTRAINT `fk_task_id` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_depends_on` FOREIGN KEY (`depends_on_task_id`) REFERENCES `tasks` (`id`) ON DELETE CASCADE
 );
-
--- Insert some example tasks for testing
-INSERT INTO tasks (task_type, priority, payload, status, scheduled_at)
-VALUES 
-  ('send_email', 1, '{"to":"user1@example.com","subject":"Welcome","body":"Welcome to our service!"}', 'pending', NOW()),
-  ('send_email', 2, '{"to":"user2@example.com","subject":"Important Update","body":"System will be down for maintenance"}', 'pending', NOW()),
-  ('process_data', 1, '{"dataset_id":"dataset-1","operations":["filter","sort","aggregate"]}', 'pending', NOW());
-
--- Add a dependency between tasks (task 3 depends on task 1)
-INSERT INTO task_dependencies (task_id, depends_on_task_id)
-VALUES (3, 1); 
