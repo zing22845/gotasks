@@ -1,9 +1,10 @@
 package manager
 
 import (
-	"database/sql"
 	"fmt"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/jinjing02/gotasks/pkg/db"
 	"github.com/jinjing02/gotasks/pkg/models"
@@ -26,77 +27,60 @@ func NewTaskManager(db *db.DB, repo *repository.TaskRepository) *TaskManager {
 
 // CleanupStalledTasks resets tasks that have been running too long
 func (m *TaskManager) CleanupStalledTasks(maxRunTime time.Duration) (int64, error) {
-	query := `
-		UPDATE tasks
-		SET status = 'pending',
-			worker_id = NULL,
-			lock_version = lock_version + 1,
-			scheduled_at = NOW()
-		WHERE status = 'running'
-			AND started_at < ?
-	`
-
 	stuckTime := time.Now().Add(-maxRunTime)
-	result, err := m.db.Exec(query, stuckTime)
-	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup stalled tasks: %w", err)
+
+	result := m.db.Model(&models.Task{}).
+		Where("status = ?", models.TaskStatusRunning).
+		Where("started_at < ?", stuckTime).
+		Updates(map[string]interface{}{
+			"status":       models.TaskStatusPending,
+			"worker_id":    nil,
+			"lock_version": gorm.Expr("lock_version + 1"),
+			"scheduled_at": time.Now(),
+		})
+
+	if result.Error != nil {
+		return 0, fmt.Errorf("failed to cleanup stalled tasks: %w", result.Error)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get affected rows: %w", err)
-	}
-
-	return rowsAffected, nil
+	return result.RowsAffected, nil
 }
 
 // MarkExpiredTasks marks tasks that have passed their expiration time as expired
 func (m *TaskManager) MarkExpiredTasks() (int64, error) {
-	query := `
-		UPDATE tasks
-		SET status = 'expired',
-			lock_version = lock_version + 1,
-			completed_at = NOW(),
-			error = 'Task expired'
-		WHERE status IN ('pending', 'running')
-			AND expires_at IS NOT NULL
-			AND expires_at <= NOW()
-	`
+	result := m.db.Model(&models.Task{}).
+		Where("status IN ?", []models.TaskStatus{models.TaskStatusPending, models.TaskStatusRunning}).
+		Where("expires_at IS NOT NULL").
+		Where("expires_at <= ?", time.Now()).
+		Updates(map[string]interface{}{
+			"status":       models.TaskStatusExpired,
+			"lock_version": gorm.Expr("lock_version + 1"),
+			"completed_at": time.Now(),
+			"error":        "Task expired",
+		})
 
-	result, err := m.db.Exec(query)
-	if err != nil {
-		return 0, fmt.Errorf("failed to mark expired tasks: %w", err)
+	if result.Error != nil {
+		return 0, fmt.Errorf("failed to mark expired tasks: %w", result.Error)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get affected rows: %w", err)
-	}
-
-	return rowsAffected, nil
+	return result.RowsAffected, nil
 }
 
 // SetExpirationForTask sets an expiration time for a specific task
 func (m *TaskManager) SetExpirationForTask(taskID uint64, expiresAt time.Time) error {
-	query := `
-		UPDATE tasks
-		SET expires_at = ?,
-			lock_version = lock_version + 1
-		WHERE id = ?
-			AND status IN ('pending', 'running')
-	`
+	result := m.db.Model(&models.Task{}).
+		Where("id = ?", taskID).
+		Where("status IN ?", []models.TaskStatus{models.TaskStatusPending, models.TaskStatusRunning}).
+		Updates(map[string]interface{}{
+			"expires_at":   expiresAt,
+			"lock_version": gorm.Expr("lock_version + 1"),
+		})
 
-	result, err := m.db.Exec(query, expiresAt, taskID)
-	if err != nil {
-		return fmt.Errorf("failed to set task expiration: %w", err)
+	if result.Error != nil {
+		return fmt.Errorf("failed to set task expiration: %w", result.Error)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get affected rows: %w", err)
-	}
-
-	if rowsAffected == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("task not found or not in a state that can be updated")
 	}
 
@@ -105,67 +89,36 @@ func (m *TaskManager) SetExpirationForTask(taskID uint64, expiresAt time.Time) e
 
 // SetExpirationForTaskType sets an expiration time delta for all pending tasks of a specific type
 func (m *TaskManager) SetExpirationForTaskType(taskType string, expirationDelta time.Duration) (int64, error) {
-	query := `
-		UPDATE tasks
-		SET expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND),
-			lock_version = lock_version + 1
-		WHERE task_type = ?
-			AND status = 'pending'
-	`
+	expiryTime := time.Now().Add(expirationDelta)
 
-	// Convert duration to seconds for MySQL interval
-	seconds := int(expirationDelta.Seconds())
+	result := m.db.Model(&models.Task{}).
+		Where("task_type = ?", taskType).
+		Where("status = ?", models.TaskStatusPending).
+		Updates(map[string]interface{}{
+			"expires_at":   expiryTime,
+			"lock_version": gorm.Expr("lock_version + 1"),
+		})
 
-	result, err := m.db.Exec(query, seconds, taskType)
-	if err != nil {
-		return 0, fmt.Errorf("failed to set expiration for task type: %w", err)
+	if result.Error != nil {
+		return 0, fmt.Errorf("failed to set expiration for task type: %w", result.Error)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get affected rows: %w", err)
-	}
-
-	return rowsAffected, nil
+	return result.RowsAffected, nil
 }
 
 // GetExpiredTasks retrieves a list of recently expired tasks
 func (m *TaskManager) GetExpiredTasks(limit int, since time.Duration) ([]*models.Task, error) {
-	query := `
-		SELECT id, parent_id, root_id, task_type, priority, payload, 
-				status, result, error, retry_count, max_retries, 
-				worker_id, lock_version, scheduled_at, expires_at, started_at, 
-				completed_at, created_at, updated_at
-		FROM tasks
-		WHERE status = 'expired'
-			AND completed_at >= ?
-		ORDER BY completed_at DESC
-		LIMIT ?
-	`
-
-	sinceTime := time.Now().Add(-since)
-	rows, err := m.db.Query(query, sinceTime, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get expired tasks: %w", err)
-	}
-	defer rows.Close()
-
 	var tasks []*models.Task
-	for rows.Next() {
-		var task models.Task
-		var payload, result sql.NullString
+	sinceTime := time.Now().Add(-since)
 
-		err := rows.Scan(
-			&task.ID, &task.ParentID, &task.RootID, &task.TaskType, &task.Priority, &payload,
-			&task.Status, &result, &task.Error, &task.RetryCount, &task.MaxRetries,
-			&task.WorkerID, &task.LockVersion, &task.ScheduledAt, &task.ExpiresAt, &task.StartedAt,
-			&task.CompletedAt, &task.CreatedAt, &task.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan task: %w", err)
-		}
+	result := m.db.Where("status = ?", models.TaskStatusExpired).
+		Where("completed_at >= ?", sinceTime).
+		Order("completed_at DESC").
+		Limit(limit).
+		Find(&tasks)
 
-		tasks = append(tasks, &task)
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to get expired tasks: %w", result.Error)
 	}
 
 	return tasks, nil
